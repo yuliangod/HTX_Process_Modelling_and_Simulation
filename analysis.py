@@ -75,10 +75,10 @@ class Analysis:
             # Store the results for this station
             final_results.append({
                 "Station": station,
-                "Mean of Means Queue Length": mean_of_means,
+                f"Mean {target_col} across all simulations": mean_of_means,
                 "Standard Deviation of Means": std_of_means,
-                "Average Queue Length Lower Bound": ci_lower,
-                "Average Queue Length Upper Bound": ci_upper
+                f"Average {target_col} Lower Bound": ci_lower,
+                f"Average {target_col} Upper Bound": ci_upper
             })
             
         # Convert station_within_tol into a DataFrame and apply .all() to check if all values are True for each station

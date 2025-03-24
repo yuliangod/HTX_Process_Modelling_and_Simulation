@@ -289,7 +289,7 @@ with st.container():
 st.write("Get simulation results here")
 with st.container():
     cols = st.columns(4)
-    burn_in_period = cols[1].number_input("Burn in Period", value=3200)
+    burn_in_period = cols[1].number_input("Burn in Period", value=3200, min_value=400)
     num_iterations = cols[2].number_input("Num Iterations", value=20)
     confidence_level = cols[3].number_input("Confidence Interval", value=0.95)
     with cols[0]:
