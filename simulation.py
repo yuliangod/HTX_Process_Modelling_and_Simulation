@@ -109,7 +109,7 @@ class Patient:
         yield self.env.process(station.treatment(patient_num = self.num))
         
 class EmergencyDepartment:
-    def __init__(self, env, main_labs:Station, main_dr_room:list[Station], main_bed:list[Station], ft_labs:Station, ft_dr_room):
+    def __init__(self, env, main_labs:Station, main_dr_room:list[Station], main_bed:list[Station], ft_labs:Station, ft_dr_room, prob_patient_fast_track, patient_interarrival_dist):
         self.env = env
         
         # set environment
@@ -124,6 +124,10 @@ class EmergencyDepartment:
         # fast track environment set-up
         self.ft_labs = ft_labs
         self.ft_dr_room = ft_dr_room
+        
+        # patient environment set-up
+        self.prob_patient_fast_track = prob_patient_fast_track
+        self.patient_interarrival_dist = patient_interarrival_dist
 
     def run(self, until):
         self.env.process(self.spawn_patients())  # Continuously spawn patients
@@ -133,7 +137,7 @@ class EmergencyDepartment:
         """Spawns a new patient every interarrival time."""
         patient_num = 1
         while True:
-            if random.random() < PROB_PATIENT_FAST_TRACK:
+            if random.random() < self.prob_patient_fast_track:
                 # spawn fast track patient
                 patient = Patient(env=self.env, patient_num=patient_num, type='FT')
                 # make patient go through ED processes
@@ -144,7 +148,7 @@ class EmergencyDepartment:
                 # make patient go through ED processes
                 self.env.process(patient.process(labs=self.main_labs, dr_room=self.main_dr_room, bed=self.main_bed))
                 
-            interarrival_time = PATIENT_INTERARRIVAL_DIST()
+            interarrival_time = self.patient_interarrival_dist()
             yield self.env.timeout(interarrival_time)
             patient_num += 1
 
@@ -168,7 +172,7 @@ if __name__ == "__main__":
         ]
     ft_dr_room = Station(num_staff=1, name="FT Doctor's Room", treatment_time_dist=TREATMENT_TIME_DIST, prob_station_needed=1)
     
-    ED = EmergencyDepartment(env=env, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room)
+    ED = EmergencyDepartment(env=env, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room, prob_patient_fast_track=PROB_PATIENT_FAST_TRACK, patient_interarrival_dist=PATIENT_INTERARRIVAL_DIST)
     ED.run(until=1000)
     
     # Store queue data for plotting

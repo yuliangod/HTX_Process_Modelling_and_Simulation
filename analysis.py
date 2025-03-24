@@ -13,7 +13,7 @@ class Analysis:
     def __init__(self):
         pass
     
-    def run_analysis_stat(self, burn_in_period:int, confidence_level, num_iterations:int, main_labs, main_dr_room, main_bed, ft_labs, ft_dr_room, tol=0.5):
+    def run_analysis_stat(self, burn_in_period:int, confidence_level, num_iterations:int, main_labs, main_dr_room, main_bed, ft_labs, ft_dr_room, prob_patient_fast_track, patient_interarrival_dist, tol=0.5):
         # Run the batch simulations
         queue_df_list, busy_df_list, queue_bin_df_list, busy_bin_df_list, queue_mavg, busy_mavg = self.run_batch(
             num_iterations=num_iterations, 
@@ -22,30 +22,38 @@ class Analysis:
             main_dr_room=main_dr_room, 
             main_bed=main_bed, 
             ft_labs=ft_labs, 
-            ft_dr_room=ft_dr_room
+            ft_dr_room=ft_dr_room,
+            prob_patient_fast_track=prob_patient_fast_track, 
+            patient_interarrival_dist=patient_interarrival_dist,
         )
         
-        # Define a list to store the means of queue lengths for each station across all runs
-        station_mean_values = {station: [] for queue_df in queue_bin_df_list for station in queue_df['Station'].unique()}
-        station_within_tol = {station: [] for queue_df in queue_bin_df_list for station in queue_df['Station'].unique()}
+        queue_results_df = self.compile_stats_table(data_bin_df_list=queue_bin_df_list, burn_in_period=burn_in_period, confidence_level=confidence_level, tol=tol, num_iterations=num_iterations, target_col="Queue Length")
+        busy_staff_results_df = self.compile_stats_table(data_bin_df_list=busy_bin_df_list, burn_in_period=burn_in_period, confidence_level=confidence_level, tol=tol, num_iterations=num_iterations, target_col="Busy Staff")
 
-        # Iterate over each DataFrame in queue_bin_df_list
-        for queue_df in queue_bin_df_list:
+        return queue_results_df, busy_staff_results_df
+
+    def compile_stats_table(self,  data_bin_df_list, burn_in_period, confidence_level, tol, num_iterations, target_col="Queue Length"):
+        # Define a list to store the means of queue lengths for each station across all runs
+        station_mean_values = {station: [] for queue_df in data_bin_df_list for station in queue_df['Station'].unique()}
+        station_within_tol = {station: [] for queue_df in data_bin_df_list for station in queue_df['Station'].unique()}
+
+        # Iterate over each DataFrame in data_bin_df_list
+        for data_df in data_bin_df_list:
             # Filter out rows before the burn-in period
-            queue_df_filtered = queue_df[queue_df['Time'] >= burn_in_period]
+            data_df_filtered = data_df[data_df['Time'] >= burn_in_period]
             
             # Group the filtered DataFrame by 'Station' to calculate statistics for each station
-            grouped = queue_df_filtered.groupby('Station')
+            grouped = data_df_filtered.groupby('Station')
             
             # Loop over each station and calculate the mean queue length for each run
             for station, group in grouped:
                 t_score = stats.t.ppf(1 - (1-confidence_level)/2, df=len(group)-1)
-                se = group["Queue Length"].std()
+                se = group[target_col].std()
                 within_tol = t_score*se < tol
                 station_within_tol[station].append(within_tol)
                 
                 # Calculate the mean queue length for this station in this simulation run
-                mean_queue_length = group["Queue Length"].mean()
+                mean_queue_length = group[target_col].mean()
                 
                 # Store the mean queue length for this station in this run
                 station_mean_values[station].append(mean_queue_length)
@@ -77,7 +85,7 @@ class Analysis:
         tol_df = pd.DataFrame(station_within_tol).all()
 
         # Assign a name to the Series
-        tol_df.name = 'All Within Tolerance'
+        tol_df.name = 'All Simulations Within Tolerance'
 
         # Join the tol_df (True/False) as a new column to the final_results DataFrame
         final_results_df = pd.DataFrame(final_results)
@@ -85,13 +93,13 @@ class Analysis:
 
         return final_results_df
             
-    def run_batch(self, num_iterations:int, batch_run_size:int, main_labs, main_dr_room, main_bed, ft_labs, ft_dr_room, mavg_list=[5,10]):
+    def run_batch(self, num_iterations:int, batch_run_size:int, main_labs, main_dr_room, main_bed, ft_labs, ft_dr_room, prob_patient_fast_track, patient_interarrival_dist, mavg_list=[5,10]):
         queue_df_list = []
         busy_df_list = []
         queue_bin_df_list = []
         busy_bin_df_list = []
         for i in range(num_iterations):
-            queue_df, busy_df, queue_bin_df, busy_bin_df = self.run_simulation(batch_run_size=batch_run_size, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room, get_bin=True)
+            queue_df, busy_df, queue_bin_df, busy_bin_df = self.run_simulation(batch_run_size=batch_run_size, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room, prob_patient_fast_track=prob_patient_fast_track, patient_interarrival_dist=patient_interarrival_dist,get_bin=True)
             
             queue_df_list.append(queue_df)
             busy_df_list.append(busy_df)
@@ -124,13 +132,13 @@ class Analysis:
             
         return average_df  # Return for further use
     
-    def run_simulation(self, batch_run_size:int, main_labs, main_dr_room, main_bed, ft_labs, ft_dr_room, get_bin=False):
+    def run_simulation(self, batch_run_size:int, main_labs, main_dr_room, main_bed, ft_labs, ft_dr_room, prob_patient_fast_track, patient_interarrival_dist, get_bin=False):
         for station in main_labs + ft_labs + [main_dr_room, ft_dr_room, main_bed]:
             station.reset_station()
         
         env = simpy.Environment()
     
-        ED = EmergencyDepartment(env=env, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room)
+        ED = EmergencyDepartment(env=env, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room, prob_patient_fast_track=prob_patient_fast_track, patient_interarrival_dist=patient_interarrival_dist)
         ED.run(until=batch_run_size)
         
         A = Analysis()
@@ -196,7 +204,9 @@ class Analysis:
         return bin_df
     
 if __name__ == "__main__":
-    TREATMENT_TIME_DIST = lambda: random.expovariate(1 / 5)
+    PATIENT_INTERARRIVAL_DIST = lambda: random.expovariate(1 / 5)
+    TREATMENT_TIME_DIST = lambda: random.expovariate(1 / 3)
+    PROB_PATIENT_FAST_TRACK = 0.8
     
     # define main track settings
     main_labs = [
@@ -221,4 +231,4 @@ if __name__ == "__main__":
     #    print(busy_df)
     #queue_df_list, busy_df_list, queue_mavg, busy_mavg = A.run_batch(num_iterations=5, batch_run_size=1000, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room)
     #print(busy_mavg)
-    print(A.run_analysis_stat(burn_in_period=400, confidence_level=0.95, num_iterations=5, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room))
+    print(A.run_analysis_stat(burn_in_period=400, confidence_level=0.95, num_iterations=5, main_labs=main_labs, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs, ft_dr_room=ft_dr_room, prob_patient_fast_track=PROB_PATIENT_FAST_TRACK, patient_interarrival_dist=PATIENT_INTERARRIVAL_DIST))

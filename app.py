@@ -10,8 +10,6 @@ import streamlit as st
 from analysis import Analysis
 from simulation import EmergencyDepartment, Station
 
-UNTIL = 12000
-
 st.set_page_config(layout="wide")  # Expands the page width
 
 # Define available distributions
@@ -42,6 +40,11 @@ if "stations" not in st.session_state:
         "Main Beds": [
             {"name": "Main Beds", "num_staff": 30, "distribution": "Exponential", "parameters": {"rate": 1/720}, "prob_station_needed": 0.01}
         ]
+    }
+    
+if "patient" not in st.session_state:
+    st.session_state.patient = {
+        "Patient" : {"distribution":"Exponential", "parameters":{"rate":1/5}, "prob_patient_fast_track":0.8}
     }
 
 def check_duplicate_names(station_type="Main Lab"):
@@ -145,12 +148,38 @@ def station_settings(station_type="Main Lab"):
                 st.rerun()
             
         check_duplicate_names(station_type=station_type)
+
+def patient_settings():
+    # Collapsible container for Main Labs
+    with st.expander(f"**😷Patients Configuration**", expanded=True):
+        # Create a container for the row
+        with st.container():
+            # Create columns for inputs in the row
+            cols = st.columns([2, 1.2, 2, 4, 2, 2])  # Adjusted column sizes for the layout
             
+            station_config = st.session_state.patient["Patient"]
+            # Station configuration form inside the container
+            with st.form(f"patient_form", clear_on_submit=True):
+                station_config['prob_patient_fast_track'] = cols[1].number_input("Probability Patient is Fast Track", value=station_config['prob_patient_fast_track'], key=f"prob_patient_fast_track")
+
+                # Distribution selection
+                selected_dist = cols[2].selectbox("Treatment Time Dist", DISTRIBUTION_OPTIONS.keys(), index=list(DISTRIBUTION_OPTIONS.keys()).index(station_config['distribution']), key=f"patient_dist_select")
+                station_config["distribution"] = selected_dist
+                # Only update station_config if there's a change
+                if selected_dist != st.session_state[f"patient_dist_select"]:
+                    st.rerun()  # Force Streamlit to rerun to reflect immediate change
+                #station_config["distribution"] = selected_dist
+                
+                # Parameter settings next to the distribution dropdown
+                dist_params_container = cols[3].container()  # Column for distribution params
+                update_distribution_fields(dist_params_container, selected_dist, station_config['parameters'], idx=0, station_config=station_config, station_type="patient")
+                
 station_settings(station_type="Main Lab")
 station_settings(station_type="Main Doctor's Room")
 station_settings(station_type="Main Beds")
 station_settings(station_type="Fast Track Lab")
 station_settings(station_type="Fast Track Doctor's Room")
+patient_settings()
 
 def get_distribution_function(distribution_name, parameters):
     """ Returns a callable function that generates random values from the chosen distribution. """
@@ -180,66 +209,108 @@ def get_stations_list(station_type="Main Lab"):
     
     return stations_list
 
-# Run simulation button outside the container
-if st.button("Run simulation"):
-    env = simpy.Environment()
+st.write("Check For Initialisation Bias in this Section")
+with st.container():
+    cols = st.columns(4)
+    # Run simulation button outside the container
+    until = cols[1].number_input("Simulation Duration", value=12000)
+    mavg_value_1 = cols[2].number_input("1st Moving Average Window", value=10)
+    mavg_value_2 = cols[3].number_input("2nd Moving Average Window", value=30)
+    with cols[0]:
+        st.write(" ")
+        check_ini_bias_btn = st.button("Check Initialisation Bias")
 
-    main_labs_list = get_stations_list(station_type="Main Lab")
-    main_dr_room = get_stations_list(station_type="Main Doctor's Room")[0]
-    main_bed = get_stations_list(station_type="Main Beds")[0]
-    
-    ft_labs_list = get_stations_list(station_type="Fast Track Lab")
-    ft_dr_room = get_stations_list(station_type="Fast Track Doctor's Room")[0]
+    if check_ini_bias_btn:
+        env = simpy.Environment()
+
+        main_labs_list = get_stations_list(station_type="Main Lab")
+        main_dr_room = get_stations_list(station_type="Main Doctor's Room")[0]
+        main_bed = get_stations_list(station_type="Main Beds")[0]
         
-    # Create a new simulation environment
-    ED = EmergencyDepartment(env, main_labs=main_labs_list, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs_list, ft_dr_room=ft_dr_room)
-    # Run the simulation
-    ED.run(until=UNTIL)
+        ft_labs_list = get_stations_list(station_type="Fast Track Lab")
+        ft_dr_room = get_stations_list(station_type="Fast Track Doctor's Room")[0]
+        
+        prob_patient_fast_track=st.session_state.patient["Patient"]["prob_patient_fast_track"]
+        patient_interarrival_dist=get_distribution_function(st.session_state.patient["Patient"]['distribution'], st.session_state.patient["Patient"]['parameters'])
 
-    A = Analysis()
-    queue_df, busy_df = A.get_df(ED)
-    
-    # Streamlit app content for the ED page
-    st.subheader("📊 Emergency Department Simulation Results")
-
-    # Display a message explaining the simulation
-    st.write(
-        "This page displays the queue length over time for various stations in the Emergency Department. "
-        "You can use this visualization to track the workload at each station during the simulation."
-    )
-    
-    num_iterations = 5
-    
-    queue_df_list, busy_df_list, queue_bin_df_list, busy_bin_df_list, queue_mavg, busy_mavg = A.run_batch(num_iterations=num_iterations, batch_run_size=UNTIL, main_labs=main_labs_list, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs_list, ft_dr_room=ft_dr_room)
-    busy_mavg.to_csv("test.csv")
-    
-    st.write("Queue Length Welch's Test")
-    tab_names = [col for col in queue_mavg.columns if col not in {"Time", "Station"}]
-
-    # Create separate tabs first
-    tabs = st.tabs(tab_names)
-
-    # Assign each plot to its respective tab
-    for i, tab in enumerate(tabs):
-        with tab:  # Ensure each plot is inside the correct tab
-            fig_queue_mavg = px.line(queue_mavg, x='Time', y=tab_names[i], color='Station', 
-                                title=f"Queue Length at Each Station{tab_names[i]} Over Time", 
-                                line_shape='hv')
-            st.plotly_chart(fig_queue_mavg, key=f"queue_mavg_{i}")
             
-            fig_busy_mavg = px.line(busy_mavg, x='Time', y=tab_names[i], color='Station', 
-                                title=f"Busy Staff at Each Station {tab_names[i]} Over Time",
-                                line_shape='hv')
-            st.plotly_chart(fig_busy_mavg, key=f"busy_mavg_{i}")
-            
-    with st.expander("Individual simulations"):
-        tab_names = ["Simulation " + str(i) for i in range(1,num_iterations+1)]
-        for i,tab in enumerate(st.tabs(tab_names)):
-            with tab:
-                # Plotting the queue length data using Plotly
-                st.write("Queue Length at Each Station Over Time")
-                st.line_chart(queue_df_list[i], x='Time', y='Queue Length', color='Station')
+        # Create a new simulation environment
+        ED = EmergencyDepartment(env, main_labs=main_labs_list, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs_list, ft_dr_room=ft_dr_room, prob_patient_fast_track=prob_patient_fast_track, patient_interarrival_dist=patient_interarrival_dist)
+        # Run the simulation
+        ED.run(until=until)
 
-                # Plotting the busy staff data using Plotly
-                st.write("Number of Busy Staff at Each Station Over Time")
-                st.line_chart(busy_df_list[i], x='Time', y='Busy Staff', color='Station')
+        A = Analysis()
+        queue_df, busy_df = A.get_df(ED)
+        
+        # Streamlit app content for the ED page
+        st.subheader("📊 Emergency Department Simulation Results")
+
+        # Display a message explaining the simulation
+        st.write(
+            "This page displays the queue length over time for various stations in the Emergency Department. "
+            "You can use this visualization to track the workload at each station during the simulation."
+        )
+        
+        num_iterations = 5
+        
+        queue_df_list, busy_df_list, queue_bin_df_list, busy_bin_df_list, queue_mavg, busy_mavg = A.run_batch(num_iterations=num_iterations, batch_run_size=until, main_labs=main_labs_list, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs_list, ft_dr_room=ft_dr_room, mavg_list=[mavg_value_1, mavg_value_2], prob_patient_fast_track=prob_patient_fast_track, patient_interarrival_dist=patient_interarrival_dist)
+        
+        st.write("Queue Length Welch's Test")
+        tab_names = [col for col in queue_mavg.columns if col not in {"Time", "Station"}]
+
+        # Create separate tabs first
+        tabs = st.tabs(tab_names)
+
+        # Assign each plot to its respective tab
+        for i, tab in enumerate(tabs):
+            with tab:  # Ensure each plot is inside the correct tab
+                fig_queue_mavg = px.line(queue_mavg, x='Time', y=tab_names[i], color='Station', 
+                                    title=f"Queue Length at Each Station{tab_names[i]} Over Time", 
+                                    line_shape='hv')
+                st.plotly_chart(fig_queue_mavg, key=f"queue_mavg_{i}")
+                
+                fig_busy_mavg = px.line(busy_mavg, x='Time', y=tab_names[i], color='Station', 
+                                    title=f"Busy Staff at Each Station {tab_names[i]} Over Time",
+                                    line_shape='hv')
+                st.plotly_chart(fig_busy_mavg, key=f"busy_mavg_{i}")
+                
+        with st.expander("Individual simulations"):
+            tab_names = ["Simulation " + str(i) for i in range(1,num_iterations+1)]
+            for i,tab in enumerate(st.tabs(tab_names)):
+                with tab:
+                    # Plotting the queue length data using Plotly
+                    st.write("Queue Length at Each Station Over Time")
+                    st.line_chart(queue_df_list[i], x='Time', y='Queue Length', color='Station')
+
+                    # Plotting the busy staff data using Plotly
+                    st.write("Number of Busy Staff at Each Station Over Time")
+                    st.line_chart(busy_df_list[i], x='Time', y='Busy Staff', color='Station')
+                
+st.write("Get simulation results here")
+with st.container():
+    cols = st.columns(4)
+    burn_in_period = cols[1].number_input("Burn in Period", value=3200)
+    num_iterations = cols[2].number_input("Num Iterations", value=20)
+    confidence_level = cols[3].number_input("Confidence Interval", value=0.95)
+    with cols[0]:
+        st.write(" ")
+        st.write(" ")
+        results_btn = st.button("Get Simulation Results")
+    if results_btn:
+        env = simpy.Environment()
+
+        main_labs_list = get_stations_list(station_type="Main Lab")
+        main_dr_room = get_stations_list(station_type="Main Doctor's Room")[0]
+        main_bed = get_stations_list(station_type="Main Beds")[0]
+        
+        ft_labs_list = get_stations_list(station_type="Fast Track Lab")
+        ft_dr_room = get_stations_list(station_type="Fast Track Doctor's Room")[0]
+        
+        prob_patient_fast_track=st.session_state.patient["Patient"]["prob_patient_fast_track"]
+        patient_interarrival_dist=get_distribution_function(st.session_state.patient["Patient"]['distribution'], st.session_state.patient["Patient"]['parameters'])
+        
+        A = Analysis()
+        queue_results_df, busy_staff_results_df = A.run_analysis_stat(burn_in_period=burn_in_period, confidence_level=confidence_level, num_iterations=num_iterations, main_labs=main_labs_list, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs_list, ft_dr_room=ft_dr_room, prob_patient_fast_track=prob_patient_fast_track, patient_interarrival_dist=patient_interarrival_dist)
+        
+        st.dataframe(queue_results_df)
+        st.dataframe(busy_staff_results_df)
