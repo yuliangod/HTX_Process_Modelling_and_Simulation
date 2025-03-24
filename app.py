@@ -7,7 +7,10 @@ import plotly.express as px
 import simpy
 import streamlit as st
 
-from ED import EmergencyDepartment, Station
+from analysis import Analysis
+from simulation import EmergencyDepartment, Station
+
+UNTIL = 12000
 
 st.set_page_config(layout="wide")  # Expands the page width
 
@@ -163,11 +166,10 @@ def get_distribution_function(distribution_name, parameters):
         
 #st.write(st.session_state)
 
-def get_stations_list(env, station_type="Main Lab"):
+def get_stations_list(station_type="Main Lab"):
     # Convert session state labs to Station objects
     stations_list = [
         Station(
-            env=env,
             name=station_config['name'],
             num_staff=station_config['num_staff'],
             treatment_time_dist=get_distribution_function(station_config['distribution'], station_config['parameters']),
@@ -182,33 +184,21 @@ def get_stations_list(env, station_type="Main Lab"):
 if st.button("Run simulation"):
     env = simpy.Environment()
 
-    main_labs_list = get_stations_list(env=env, station_type="Main Lab")
-    main_dr_room = get_stations_list(env=env, station_type="Main Doctor's Room")[0]
-    main_bed = get_stations_list(env=env, station_type="Main Beds")[0]
+    main_labs_list = get_stations_list(station_type="Main Lab")
+    main_dr_room = get_stations_list(station_type="Main Doctor's Room")[0]
+    main_bed = get_stations_list(station_type="Main Beds")[0]
     
-    ft_labs_list = get_stations_list(env=env, station_type="Fast Track Lab")
-    ft_dr_room = get_stations_list(env=env, station_type="Fast Track Doctor's Room")[0]
+    ft_labs_list = get_stations_list(station_type="Fast Track Lab")
+    ft_dr_room = get_stations_list(station_type="Fast Track Doctor's Room")[0]
         
     # Create a new simulation environment
     ED = EmergencyDepartment(env, main_labs=main_labs_list, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs_list, ft_dr_room=ft_dr_room)
-
     # Run the simulation
-    ED.run()
+    ED.run(until=UNTIL)
 
-    # Store queue data for plotting
-    queue_df_list = []
-    busy_df_list = []
-    for station in ED.main_labs + ED.ft_labs + [ED.main_dr_room, ED.ft_dr_room, ED.main_bed]:
-        queue_df_list.append(pd.DataFrame(station.queue_length_log))
-        busy_df_list.append(pd.DataFrame(station.busy_staff_log))
-        #st.write(station.queue_length_log)
-
-    # Combine all data into a single DataFrame
-    queue_df = pd.concat(queue_df_list)
-    busy_df = pd.concat(busy_df_list)
-    print(queue_df)
-    print(busy_df)
-
+    A = Analysis()
+    queue_df, busy_df = A.get_df(ED)
+    
     # Streamlit app content for the ED page
     st.subheader("📊 Emergency Department Simulation Results")
 
@@ -217,11 +207,39 @@ if st.button("Run simulation"):
         "This page displays the queue length over time for various stations in the Emergency Department. "
         "You can use this visualization to track the workload at each station during the simulation."
     )
+    
+    num_iterations = 5
+    
+    queue_df_list, busy_df_list, queue_bin_df_list, busy_bin_df_list, queue_mavg, busy_mavg = A.run_batch(num_iterations=num_iterations, batch_run_size=UNTIL, main_labs=main_labs_list, main_dr_room=main_dr_room, main_bed=main_bed, ft_labs=ft_labs_list, ft_dr_room=ft_dr_room)
+    busy_mavg.to_csv("test.csv")
+    
+    st.write("Queue Length Welch's Test")
+    tab_names = [col for col in queue_mavg.columns if col not in {"Time", "Station"}]
 
-    # Plotting the queue length data using Plotly
-    fig_queue = px.line(queue_df, x='Time', y='Queue Length', color='Station', title="Queue Length at Each Station Over Time")
-    st.plotly_chart(fig_queue)
+    # Create separate tabs first
+    tabs = st.tabs(tab_names)
 
-    # Plotting the busy staff data using Plotly
-    fig_busy = px.line(busy_df, x='Time', y='Busy Staff', color='Station', title="Number of Busy Staff at Each Station Over Time")
-    st.plotly_chart(fig_busy)
+    # Assign each plot to its respective tab
+    for i, tab in enumerate(tabs):
+        with tab:  # Ensure each plot is inside the correct tab
+            fig_queue_mavg = px.line(queue_mavg, x='Time', y=tab_names[i], color='Station', 
+                                title=f"Queue Length at Each Station{tab_names[i]} Over Time", 
+                                line_shape='hv')
+            st.plotly_chart(fig_queue_mavg, key=f"queue_mavg_{i}")
+            
+            fig_busy_mavg = px.line(busy_mavg, x='Time', y=tab_names[i], color='Station', 
+                                title=f"Busy Staff at Each Station {tab_names[i]} Over Time",
+                                line_shape='hv')
+            st.plotly_chart(fig_busy_mavg, key=f"busy_mavg_{i}")
+            
+    with st.expander("Individual simulations"):
+        tab_names = ["Simulation " + str(i) for i in range(1,num_iterations+1)]
+        for i,tab in enumerate(st.tabs(tab_names)):
+            with tab:
+                # Plotting the queue length data using Plotly
+                st.write("Queue Length at Each Station Over Time")
+                st.line_chart(queue_df_list[i], x='Time', y='Queue Length', color='Station')
+
+                # Plotting the busy staff data using Plotly
+                st.write("Number of Busy Staff at Each Station Over Time")
+                st.line_chart(busy_df_list[i], x='Time', y='Busy Staff', color='Station')
